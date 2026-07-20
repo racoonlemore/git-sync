@@ -57,3 +57,5 @@ Módulo `github.com/racoonlemore/git-sync`. Layout:
 Distribuição: `.github/workflows/release.yml` compila binários únicos para linux/darwin/windows (amd64/arm64) ao criar tag `vX.Y.Z`; `ci.yml` roda `vet` + `test -race` e cross-compila em cada push/PR.
 
 Única dependência externa: `github.com/fsnotify/fsnotify` (observação de arquivos).
+
+.
