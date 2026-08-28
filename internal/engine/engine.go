@@ -23,7 +23,7 @@ import (
 // Parâmetros fixos do daemon (não configuráveis, ver spec/CONTEXT.md).
 const (
 	// Debounce agrupa mudanças em rajada num único ciclo de sync.
-	Debounce = time.Minute
+	Debounce = 5 * time.Minute
 	// PullInterval é o intervalo do pull periódico, independente de mudanças.
 	PullInterval = time.Hour
 	// MaxCommits é o limite de commits mantidos na branch.
