@@ -107,13 +107,18 @@ func addRecursive(watcher *fsnotify.Watcher, dir string) error {
 }
 
 // isIgnored decide se um caminho de evento deve ser ignorado. Mudanças
-// dentro de .git não representam edições do usuário.
+// dentro de .git não representam edições do usuário; e o próprio log de
+// execução (LogFileName) não pode disparar sync, sob pena de laço infinito
+// (cada ciclo escreve no log, o que geraria outro evento).
 func isIgnored(root, path string) bool {
 	rel, err := filepath.Rel(root, path)
 	if err != nil {
 		return false
 	}
 	if rel == ".git" || strings.HasPrefix(rel, ".git"+string(os.PathSeparator)) {
+		return true
+	}
+	if rel == LogFileName {
 		return true
 	}
 	return false

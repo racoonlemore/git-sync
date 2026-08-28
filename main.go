@@ -35,7 +35,7 @@ Comandos:
 Flags:
   --repo <caminho>   Repositório alvo (padrão: diretório atual).
 
-Parâmetros do daemon são fixos: debounce de 1 minuto, pull a cada 1 hora,
+Parâmetros do daemon são fixos: debounce de 3 minutos, pull a cada 1 hora,
 limite de 20 commits.
 `
 

@@ -162,6 +162,39 @@ func (r *Repo) Pull() error {
 	return err
 }
 
+// Stash guarda as mudanças locais (tracked e untracked) fora da working
+// tree, deixando-a limpa para um `pull`. Deve ser chamado apenas quando há
+// mudanças (ver HasChanges); `git stash` sem mudanças é um no-op silencioso
+// que atrapalharia o pareamento com StashPop.
+func (r *Repo) Stash() error {
+	_, err := r.git("stash", "push", "--include-untracked", "-m", "git-sync")
+	return err
+}
+
+// StashPop reaplica o stash mais recente sobre a working tree. Retorna
+// conflict=true quando a reaplicação colide (o mesmo arquivo mudou no
+// remoto enquanto estava guardado); nesse caso o git preserva a entrada de
+// stash e deixa caminhos não-mesclados, cabendo ao chamador aplicar "o
+// remoto vence" (reset + StashDrop). A detecção usa `ls-files --unmerged`,
+// que independe do idioma das mensagens do git.
+func (r *Repo) StashPop() (conflict bool, err error) {
+	if _, err = r.git("stash", "pop"); err == nil {
+		return false, nil
+	}
+	out, uErr := r.git("ls-files", "--unmerged")
+	if uErr == nil && strings.TrimSpace(out) != "" {
+		return true, nil
+	}
+	return false, err
+}
+
+// StashDrop remove a entrada de stash mais recente. Funciona mesmo quando a
+// working tree ainda está com um conflito de pop pendente.
+func (r *Repo) StashDrop() error {
+	_, err := r.git("stash", "drop")
+	return err
+}
+
 // Fetch atualiza as refs do remoto sem tocar na working tree.
 func (r *Repo) Fetch() error {
 	_, err := r.git("fetch", r.Remote)

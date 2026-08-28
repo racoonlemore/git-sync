@@ -170,6 +170,52 @@ func TestConflictRemoteWins(t *testing.T) {
 	}
 }
 
+// TestPullFirstComArvoreSuja trava a regressão que quebrou em versões novas
+// do git: o ciclo roda com a working tree suja (mudança local pendente) e o
+// remoto avançou OUTRO arquivo. O pull-first tem que incorporar o remoto e
+// preservar a mudança local (nada de "Cannot fast-forward your working
+// tree"), propagando ambos ao remoto no fim.
+func TestPullFirstComArvoreSuja(t *testing.T) {
+	bare, clone, _ := newRemoteWithClone(t, "alice")
+
+	// Ambos os arquivos existem no remoto.
+	writeFile(t, clone, "racoon.bin", "r0")
+	writeFile(t, clone, "lemore.bin", "l0")
+	git(t, clone, "add", "-A")
+	git(t, clone, "commit", "-m", "bases iniciais")
+	git(t, clone, "push", "origin", "main")
+
+	// Segunda máquina avança APENAS lemore.bin.
+	other := cloneFrom(t, bare, "bob")
+	writeFile(t, other, "lemore.bin", "l1-bob")
+	git(t, other, "add", "-A")
+	git(t, other, "commit", "-m", "bob edita lemore")
+	git(t, other, "push", "origin", "main")
+
+	// Máquina local suja APENAS racoon.bin (arquivo diferente), sem commitar.
+	writeFile(t, clone, "racoon.bin", "r1-alice")
+
+	if err := newEngine(gitops.Open(clone)).SyncCycle(); err != nil {
+		t.Fatalf("SyncCycle: %v", err)
+	}
+
+	// Local: mudança da alice preservada + avanço do bob incorporado.
+	if got, _ := os.ReadFile(filepath.Join(clone, "racoon.bin")); string(got) != "r1-alice" {
+		t.Errorf("racoon.bin local = %q, esperado r1-alice (preservado)", got)
+	}
+	if got, _ := os.ReadFile(filepath.Join(clone, "lemore.bin")); string(got) != "l1-bob" {
+		t.Errorf("lemore.bin local = %q, esperado l1-bob (do remoto)", got)
+	}
+	// Remoto: recebeu a mudança da alice sobre o estado do bob.
+	verify := cloneFrom(t, bare, "verify")
+	if got, _ := os.ReadFile(filepath.Join(verify, "racoon.bin")); string(got) != "r1-alice" {
+		t.Errorf("racoon.bin no remoto = %q, esperado r1-alice", got)
+	}
+	if got, _ := os.ReadFile(filepath.Join(verify, "lemore.bin")); string(got) != "l1-bob" {
+		t.Errorf("lemore.bin no remoto = %q, esperado l1-bob", got)
+	}
+}
+
 // TestTrimAoExceLimite cobre a política de N commits: ao ultrapassar o
 // limite, a história é reescrita mantendo só os N mais recentes e forçada
 // ao remoto.

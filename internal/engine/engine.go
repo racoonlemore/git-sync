@@ -23,12 +23,17 @@ import (
 // Parâmetros fixos do daemon (não configuráveis, ver spec/CONTEXT.md).
 const (
 	// Debounce agrupa mudanças em rajada num único ciclo de sync.
-	Debounce = 5 * time.Minute
+	Debounce = 3 * time.Minute
 	// PullInterval é o intervalo do pull periódico, independente de mudanças.
 	PullInterval = time.Hour
 	// MaxCommits é o limite de commits mantidos na branch.
 	MaxCommits = 20
 )
+
+// LogFileName é o arquivo de log de execução local, na raiz do repositório.
+// É deliberadamente ignorado pelo git (não vai ao remoto) e pelo watcher
+// (escrever nele não pode disparar um novo ciclo de sync).
+const LogFileName = ".git-sync-log"
 
 // Repo é a superfície de git da qual o motor depende. É satisfeita por
 // *gitops.Repo; declará-la como interface mantém o motor testável e
@@ -39,6 +44,9 @@ type Repo interface {
 	Fetch() error
 	ResetHardToRemote(branch string) error
 	HasChanges() (bool, error)
+	Stash() error
+	StashPop() (conflict bool, err error)
+	StashDrop() error
 	StageAll() error
 	HasStagedChanges() (bool, error)
 	Commit(message string) error
@@ -105,14 +113,50 @@ func (e *Engine) SyncCycle() error {
 		return err
 	}
 
-	// 1. Tenta incorporar o que o remoto tem. Qualquer falha de pull é
-	// tratada como conflito de conteúdo: o remoto prevalece.
+	// 1. Guarda as mudanças locais para o pull rodar sobre uma working tree
+	// limpa (mantendo o pull-first da spec). Isso é obrigatório para ser
+	// agnóstico à versão do git: um `git pull` sobre árvore suja tem
+	// comportamento que varia entre versões — algumas atualizam só os
+	// arquivos necessários, outras tentam fast-forwardar a working tree
+	// inteira e falham com "Cannot fast-forward your working tree" (exit
+	// 128) se qualquer arquivo estiver sujo. Com stash, o pull sempre vê
+	// uma árvore limpa e se comporta igual em qualquer versão.
+	dirty, err := e.repo.HasChanges()
+	if err != nil {
+		return err
+	}
+	if dirty {
+		if err := e.repo.Stash(); err != nil {
+			return err
+		}
+	}
+
+	// 2. Incorpora o que o remoto tem (pull-first). Qualquer falha de pull é
+	// tratada como conflito de conteúdo: o remoto prevalece, e o que estava
+	// guardado torna-se irrelevante.
 	if err := e.repo.Pull(); err != nil {
 		e.logf("pull falhou (%v); aplicando remoto-vence: fetch + reset --hard", err)
+		if dirty {
+			_ = e.repo.StashDrop()
+		}
 		return e.resetToRemote(branch)
 	}
 
-	// 2. Prepara mudanças locais.
+	// 3. Reaplica as mudanças locais sobre o estado recém-integrado. Se
+	// colidirem (o mesmo arquivo mudou no remoto), o remoto vence.
+	if dirty {
+		conflict, err := e.repo.StashPop()
+		if err != nil {
+			return err
+		}
+		if conflict {
+			e.logf("conflito ao reaplicar mudanças locais; aplicando remoto-vence")
+			_ = e.repo.StashDrop()
+			return e.resetToRemote(branch)
+		}
+	}
+
+	// 4. Prepara mudanças locais.
 	if err := e.repo.StageAll(); err != nil {
 		return err
 	}
@@ -125,12 +169,12 @@ func (e *Engine) SyncCycle() error {
 		return nil
 	}
 
-	// 3. Commit das mudanças locais.
+	// 5. Commit das mudanças locais.
 	if err := e.repo.Commit(e.commitMessage()); err != nil {
 		return err
 	}
 
-	// 4. Trim: ao ultrapassar o limite, reescreve a história e força push.
+	// 6. Trim: ao ultrapassar o limite, reescreve a história e força push.
 	count, err := e.repo.CommitCount()
 	if err != nil {
 		return err
@@ -143,7 +187,7 @@ func (e *Engine) SyncCycle() error {
 		return e.pushOrReset(branch, true)
 	}
 
-	// 5. Push normal.
+	// 7. Push normal.
 	return e.pushOrReset(branch, false)
 }
 

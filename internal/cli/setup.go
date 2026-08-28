@@ -31,6 +31,13 @@ func Setup(repoPath string) error {
 		return nil
 	}
 
+	// Cria o log de execução local e o registra no .gitignore antes de
+	// instalar o autostart (operação só na working tree; falha aqui aborta
+	// sem ter mexido no sistema).
+	if _, err := ensureLogFile(abs); err != nil {
+		return err
+	}
+
 	binPath, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("não foi possível determinar o caminho do binário: %w", err)
