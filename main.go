@@ -30,6 +30,10 @@ Comandos:
               Não altera o remote nem o histórico de commits.
   run         Executa o processo de sincronização em background (usado pela
               unit/tarefa de autostart; normalmente não invocado à mão).
+  add-key     Embute uma chave SSH privada no binário (opcional; sem ela o
+              git usa o ambiente do usuário normalmente).
+              Uso: git-sync add-key <caminho-da-chave-privada>
+  remove-key  Remove a chave SSH embutida do binário.
   version     Mostra a versão do git-sync.
 
 Flags:
@@ -70,6 +74,14 @@ func main() {
 		err = cli.Uninstall(*repo)
 	case "run":
 		err = cli.Run(*repo)
+	case "add-key":
+		if fs.NArg() < 1 {
+			fmt.Fprintln(os.Stderr, "uso: git-sync add-key <caminho-da-chave-privada>")
+			os.Exit(2)
+		}
+		err = cli.AddKey(fs.Arg(0))
+	case "remove-key":
+		err = cli.RemoveKey()
 	default:
 		fmt.Fprintf(os.Stderr, "comando desconhecido %q\n\n", command)
 		fmt.Fprint(os.Stderr, usage)

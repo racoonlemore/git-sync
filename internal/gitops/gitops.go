@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -24,6 +25,9 @@ type Repo struct {
 	Dir string
 	// Remote é o nome do remoto de sincronização (por padrão "origin").
 	Remote string
+	// Env são variáveis de ambiente extras injetadas nos subprocessos git
+	// (ex: SSH_AUTH_SOCK para o agent in-process). Nil = herda o ambiente do processo.
+	Env []string
 }
 
 // Open cria um Repo apontando para dir usando o remoto padrão.
@@ -41,6 +45,9 @@ func (r *Repo) git(args ...string) (string, error) {
 func (r *Repo) gitInput(stdin []byte, args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = r.Dir
+	if len(r.Env) > 0 {
+		cmd.Env = append(os.Environ(), r.Env...)
+	}
 	if stdin != nil {
 		cmd.Stdin = bytes.NewReader(stdin)
 	}

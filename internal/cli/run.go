@@ -14,6 +14,7 @@ import (
 
 	"github.com/racoonlemore/git-sync/internal/engine"
 	"github.com/racoonlemore/git-sync/internal/gitops"
+	"github.com/racoonlemore/git-sync/internal/sshkey"
 )
 
 // Run implementa o comando interno `run`: o processo em background que
@@ -39,6 +40,22 @@ func Run(repoPath string) error {
 	userName, err := repo.UserName()
 	if err != nil {
 		return err
+	}
+
+	// Se há chave SSH embutida no binário, sobe um agent in-process e injeta
+	// SSH_AUTH_SOCK no ambiente de cada subprocesso git. Opcional: sem chave,
+	// o git usa o ambiente do usuário normalmente.
+	keyPEM, err := sshkey.Read()
+	if err != nil {
+		return fmt.Errorf("erro ao ler chave SSH embutida: %w", err)
+	}
+	if keyPEM != nil {
+		sockPath, stopAgent, err := sshkey.StartAgent(keyPEM)
+		if err != nil {
+			return fmt.Errorf("falha ao iniciar SSH agent: %w", err)
+		}
+		defer stopAgent()
+		repo.Env = []string{"SSH_AUTH_SOCK=" + sockPath}
 	}
 
 	// Log de execução local: além do stderr (journal do serviço), grava num

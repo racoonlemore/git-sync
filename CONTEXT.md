@@ -59,3 +59,42 @@ Distribuição: `.github/workflows/release.yml` compila binários únicos para l
 Única dependência externa: `github.com/fsnotify/fsnotify` (observação de arquivos).
 
 .
+
+# Chaves SSH
+
+Sem recompilação e sem tocar o disco, o design fica em duas partes:
+
+---
+
+1. Self-patch do binário (sem Go toolchain)
+
+O binário carrega um placeholder fixo com magic marker:
+
+// sshkey/key.go
+var embeddedKey = [4096]byte{
+0x00, 'G', 'S', 'Y', 'N', 'C', 'K', 'E', 'Y', 0x00, // magic marker
+// resto zerado
+}
+
+O comando add-key não recompila — ele abre o próprio binário, localiza o magic marker, sobrescreve os bytes da chave, salva. Sem Go, sem source, só manipulação de bytes.
+
+---
+
+2. SSH agent in-process (chave nunca toca disco)
+
+Na hora do push/pull, em vez de escrever a chave em arquivo temporário:
+
+1. Sobe um mini SSH agent in-process usando golang.org/x/crypto/ssh/agent (já está na stdlib estendida)
+2. Cria o socket em /run/user/$UID/gitsync-agent.sock — tmpfs, só RAM, nunca vai pro disco
+3. Seta SSH_AUTH_SOCK no subprocesso git
+4. Derruba o agent e o socket depois da operação
+
+---
+
+Fluxo completo
+
+add-key ~/.ssh/id_ed25519 → patcha os bytes no próprio binário
+git-sync run → lê bytes embedados → sobe agent in-process em tmp
+→ git usa SSH_AUTH_SOCK → agent responde → socket
+
+Quer que eu implemente?
