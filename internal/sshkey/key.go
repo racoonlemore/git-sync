@@ -76,6 +76,33 @@ func Patch(keyPEM []byte) error {
 	})
 }
 
+// Transplant devolve uma cópia de newBin (outro binário do git-sync, por
+// exemplo uma versão nova baixada pelo update) com a chave embutida no
+// binário em execução gravada no slot dele. Sem chave embutida, devolve
+// newBin intacto. Se newBin não tiver o slot, falha em vez de perder a chave.
+func Transplant(newBin []byte) ([]byte, error) {
+	key, err := Read()
+	if err != nil {
+		return nil, err
+	}
+	return transplant(key, newBin)
+}
+
+func transplant(key, newBin []byte) ([]byte, error) {
+	if key == nil {
+		return newBin, nil
+	}
+	off, err := findOffset(newBin)
+	if err != nil {
+		return nil, fmt.Errorf("sshkey: o novo binário não tem slot de chave; abortando para não perder a chave embutida")
+	}
+	out := bytes.Clone(newBin)
+	slot := out[off : off+MaxKeySize+1]
+	copy(slot, make([]byte, len(slot)))
+	copy(slot, key)
+	return out, nil
+}
+
 // Clear zera o slot da chave embutida (remove-key).
 func Clear() error {
 	return patchBinary(func(slot []byte) {

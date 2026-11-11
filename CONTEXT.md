@@ -48,10 +48,11 @@ Não há comando `config`: os três parâmetros do programa em background (debou
 
 Módulo `github.com/racoonlemore/git-sync`. Layout:
 
-- `main.go` — dispatch dos subcomandos (`validate`, `setup`, `uninstall`, `run`, `version`) via `flag`; sem dependência de CLI framework.
+- `main.go` — dispatch dos subcomandos (`validate`, `setup`, `uninstall`, `run`, `add-key`, `remove-key`, `update`, `version`) via `flag`; sem dependência de CLI framework.
 - `internal/gitops` — wrappers finos sobre o binário `git` executado num diretório de repositório (`Repo`). Inclui `Trim`, que reescreve a branch para os N commits mais recentes via `commit-tree` (snapshot de árvores, sem reaplicar patches — seguro para binários), e detecção de rejeição de push por divergência.
 - `internal/engine` — **seam 1**, o motor de sincronização. `SyncCycle` (pull→add→commit→push, trim ao exceder o limite), `PullCycle` (pull horário, adiado se há mudanças pendentes) e `Run` (laço com watcher `fsnotify` + debounce + ticker). A política "o remoto sempre vence" (ADR 0001/0002) vive aqui. Depende de `git` real; testado contra repositórios temporários com remoto bare local.
 - `internal/autostart` — **seam 2**, registro como serviço de usuário. Interface `Installer` com implementações `SystemdInstaller` (Linux, `~/.config/systemd/user`), `LaunchdInstaller` (macOS, `~/Library/LaunchAgents`, `RunAtLoad`) e `SchtasksInstaller` (Windows, `schtasks /SC ONLOGON /RL LIMITED`). `New()` escolhe por `runtime.GOOS`. `UnitName` gera o nome determinístico `git-sync-<pasta>-<hash sha256 do caminho absoluto>`, idêntico nas três plataformas — geração de nome/conteúdo é pura e testada; a execução real de systemctl/launchctl/schtasks não é coberta por CI.
+- `internal/update` — self-update a partir dos releases do GitHub (`update check` com cache de 12h em `<UserCacheDir>/git-sync/update.json`; `update apply` baixa o asset `git-sync-<goos>-<goarch>[.exe]`, confere o `digest` sha256 da API do GitHub, transplanta a chave SSH embutida com `sshkey.Transplant` e troca o binário; no Windows renomeia o exe em uso para `.old`). Ver ADR 0004.
 - `internal/cli` — orquestra os comandos sobre os dois seams (checagens do `validate`, `setup`, `uninstall`, `run`).
 
 Distribuição: `.github/workflows/release.yml` compila binários únicos para linux/darwin/windows (amd64/arm64) ao criar tag `vX.Y.Z`; `ci.yml` roda `vet` + `test -race` e cross-compila em cada push/PR.

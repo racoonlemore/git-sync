@@ -94,3 +94,40 @@ func TestPatchTooBig(t *testing.T) {
 		t.Fatal("esperava erro para chave maior que MaxKeySize")
 	}
 }
+
+func TestTransplant(t *testing.T) {
+	t.Run("sem chave devolve o binário intacto", func(t *testing.T) {
+		bin := fakeBinary(nil)
+		out, err := transplant(nil, bin)
+		if err != nil || !bytes.Equal(out, bin) {
+			t.Fatalf("out difere ou err=%v", err)
+		}
+	})
+
+	t.Run("grava a chave no slot do novo binário, sem tocar no original", func(t *testing.T) {
+		key := []byte("-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n")
+		bin := fakeBinary([]byte("lixo de uma chave antiga e mais comprida"))
+		orig := bytes.Clone(bin)
+		out, err := transplant(key, bin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(bin, orig) {
+			t.Fatal("transplant alterou o slice de entrada")
+		}
+		off, _ := findOffset(out)
+		slot := out[off : off+MaxKeySize+1]
+		if !bytes.Equal(slot[:len(key)], key) || slot[len(key)] != 0 {
+			t.Fatalf("slot = %q, quer a chave seguida de NUL", slot[:len(key)+1])
+		}
+		if !bytes.HasSuffix(out, []byte("TAIL")) || len(out) != len(bin) {
+			t.Fatal("o resto do binário mudou")
+		}
+	})
+
+	t.Run("binário sem slot falha em vez de perder a chave", func(t *testing.T) {
+		if _, err := transplant([]byte("k"), []byte("sem marcador")); err == nil {
+			t.Fatal("esperava erro")
+		}
+	})
+}

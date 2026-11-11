@@ -31,6 +31,22 @@ Rode dentro do repositório, ou aponte com `--repo <caminho>`.
 Após o `setup`, um processo em segundo plano passa a rodar no seu login e
 sincroniza o repositório automaticamente. Não há nada a configurar.
 
+## Atualização
+
+```sh
+git-sync update check     # há versão nova? (resposta em cache por 12h; --force ignora o cache)
+git-sync update apply     # baixa o release, confere o sha256 e troca o binário
+```
+
+O `apply` baixa o binário desta plataforma do último release do GitHub, recusa
+se o sha256 não conferir com o publicado pelo GitHub e **preserva a chave SSH
+embutida** (`add-key`), gravando-a no binário novo antes da troca. Os processos
+em segundo plano seguem na versão antiga até reiniciarem (no Linux:
+`systemctl --user restart 'git-sync-*'`). A pasta do binário precisa ser
+gravável pelo seu usuário. Se o repositório de releases for privado, defina
+`GITHUB_TOKEN`. Builds locais (versão `dev`) não se atualizam. Ver
+[ADR 0004](docs/adr/0004-self-update-preserva-chave.md).
+
 ## Comportamento (fixo, não configurável)
 
 - **Debounce de 1 minuto:** mudanças em rajada viram um único commit.

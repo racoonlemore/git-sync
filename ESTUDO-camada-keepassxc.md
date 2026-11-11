@@ -417,6 +417,92 @@ outras ferramentas (por exemplo, `credential_process` da AWS). **[?]** O formato
 
 ---
 
+## 8. Discussão de 2026-11-11: features desejadas e ferramentas existentes
+
+### 8.1 Features que o usuário quer
+
+1. **Cifrar e decifrar com chaves GPG.**
+2. **Commits assinados.**
+3. **Credenciais e tokens (AWS e qualquer outro) guardados no `.kdbx` e usados de
+   forma "nativa" pelas aplicações**: o usuário digita a senha do KeePass e tudo
+   funciona, sem segredo gravado em arquivo. É a feature que mais interessa.
+
+As features 1 e 2 seguem o desenho das seções 3.3 e 3.4. A feature 3 foi a que
+mais se discutiu.
+
+### 8.2 Desenho geral: agent + adaptadores **[I]**
+
+Um agent guarda o `.kdbx` aberto em memória (TTL, lock ao bloquear a tela ou
+suspender, `lock` manual). Cada aplicação recebe o segredo por um adaptador fino
+que fala o protocolo que ela já entende. Se o agent estiver bloqueado, o
+adaptador abre um prompt de senha (gráfico ou no terminal). O controle de acesso
+por processo usa as credenciais do peer no socket (`SO_PEERCRED`) e é só parcial
+contra malware rodando como o mesmo usuário. Cada entrada declara seu uso por
+tag ou atributo (por exemplo `aws_access_key_id`, `aws_mfa_serial`).
+
+Mecanismos considerados para a feature 3, do mais ao menos robusto:
+
+| # | Mecanismo | Observação |
+|---|---|---|
+| 1 | Helpers de credencial das ferramentas (AWS `credential_process`, git `credential.helper`, Docker `credHelpers`, kubectl exec plugin, Terraform, Cargo) | específico por ferramenta; formatos ainda não conferidos **[?]** |
+| 2 | Endpoint HTTP local que imita a AWS (`AWS_CONTAINER_CREDENTIALS_FULL_URI`) | cobre qualquer SDK da AWS; o `aws-vault --server` faz isso **[S]** |
+| 3 | `exec` com injeção de variáveis de ambiente | universal |
+| 4 | **`.env` com referências a entradas do cofre**, resolvidas no `run` | **escolhido pelo usuário como o mais interessante**: não prende o binário a protocolos de cada ferramenta |
+| 5 | Arquivo virtual (FIFO/FUSE) | último recurso; não funciona no Windows |
+| 6 | Ser o keyring do SO (Secret Service) | só Linux; conflita com o KWallet/gnome-keyring; descartado como base |
+
+Ganhos específicos da AWS **[I]**: guardar só a chave de longo prazo e entregar
+credenciais temporárias via STS; gerar o código MFA a partir do TOTP da entrada
+(cômodo, mas junta senha e segundo fator no mesmo cofre).
+
+Para GPG (feature 1), a opção mais pragmática levantada: `GNUPGHOME` efêmero em
+tmpfs (`/run/user/<uid>/…`), criado no unlock com a chave vinda de um anexo do
+`.kdbx` e destruído no lock, para `gpg`, `pass`, `sops` e git funcionarem sem
+mudança **[I]**. No Windows e no macOS não há tmpfs garantido **[?]**.
+
+Limites do modelo `.env` **[I]**: variável de ambiente é legível pelo mesmo usuário
+(`/proc/<pid>/environ`) e herdada pelos filhos; apps que só leem arquivo
+(`kubeconfig`, SSO da AWS, `.npmrc`) precisam que o `run` gere arquivos
+temporários em tmpfs e aponte a variável para eles.
+
+### 8.3 O que já existe (pesquisa de 2026-11-11)
+
+O modelo "`.env` com referências + `run`" já existe para KeePass. Fontes lidas
+nos READMEs e documentações dos projetos **[V]**, salvo indicação:
+
+| Projeto | Linguagem | Referência | Unlock | Notas |
+|---|---|---|---|---|
+| [desktop-secrets](https://github.com/it-atelier-gn/desktop-secrets) | Go | `.env.tpl` com `keepass(...)`; `tplenv run` | prompt + **daemon com TTL**; aprovação por uso opcional | o mais próximo da ideia; multi-SO; MIT; 1 estrela |
+| [fnox](https://fnox.jdx.dev/providers/keepass.html) | Rust | `fnox.toml`; `fnox exec` | env, campo de config ou prompt no terminal; hook de shell não pede senha | o mais maduro; lê `.kdbx` direto; cita `daemon_cache` **[?]** |
+| [Varlock](https://varlock.dev/plugins/keepass/) | JS/TS | `.env.schema` com `kp("Grupo/Entrada#Campo")` | senha vinda de env | sintaxe mais rica; arquivo (WASM) ou `keepassxc-cli` |
+| [yarrasys/kdbx](https://github.com/yarrasys/kdbx) | Go | `.keepassxc.json`; `kdbx run` | só keyfile, sem daemon | cofre por projeto e ambiente; MIT |
+| [keeenv](https://github.com/scross01/keeenv) | Python | `.keeenv` com `${"Entrada".Password}` | prompt a cada execução | simples |
+| [keepassxc-run](https://pypi.org/project/keepassxc-run/) | Python | `keepassxc://…` | o KeePassXC GUI faz o unlock (via `git-credential-keepassxc`) **[S]** | clone do `op run` |
+
+A referência de UX de todos é o [`op run` do 1Password](https://developer.1password.com/docs/cli/secrets-environment-variables):
+`.env` com `op://vault/item/campo`, `op run --env-file`, mascaramento do stdout
+e variáveis dentro da referência para trocar de ambiente.
+
+**Lacuna:** nenhum junta unlock único estilo agent, cofre sincronizado entre
+máquinas (o papel do git-sync) e SSH/assinatura/GPG saindo do mesmo `.kdbx`.
+
+### 8.4 Próximos passos sugeridos
+
+1. Spike no `agent-dev`: `.kdbx` de teste com uma entrada AWS falsa; testar
+   desktop-secrets e fnox com o fluxo real. Decidir entre **adotar** um deles para
+   a feature 3 (e focar em sync + SSH/assinatura + GPG) ou **reimplementar**
+   (o desktop-secrets é Go e MIT, bom para estudar daemon e resolvedor).
+2. Decidir se a camada é um projeto separado, com o git-sync como cliente, ou se
+   fica dentro do git-sync (ADR A da seção 6).
+
+### 8.5 Feito na mesma sessão: self-update
+
+Implementado `git-sync update check` / `update apply`, no molde do `taskthing`,
+com duas diferenças: preserva a chave SSH embutida (`sshkey.Transplant`) e exige
+o sha256 publicado pelo GitHub. Ver `docs/adr/0004-self-update-preserva-chave.md`.
+
+---
+
 ## Apêndice A: experimento de assinatura (reproduzível)
 
 Fora do repositório (diretório descartável). Resumo do procedimento:

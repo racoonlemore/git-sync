@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/racoonlemore/git-sync/internal/cli"
 )
@@ -34,6 +35,11 @@ Comandos:
               git usa o ambiente do usuário normalmente).
               Uso: git-sync add-key <caminho-da-chave-privada>
   remove-key  Remove a chave SSH embutida do binário.
+  update      Atualiza o git-sync a partir dos releases do GitHub.
+              update check [--force]  informa se há versão nova (cache de 12h)
+              update apply            baixa, confere o sha256 e troca o binário
+                                      (preserva a chave SSH embutida)
+              Repositório privado: defina GITHUB_TOKEN.
   version     Mostra a versão do git-sync.
 
 Flags:
@@ -56,6 +62,12 @@ func main() {
 		return
 	case "-v", "--version", "version":
 		fmt.Printf("git-sync %s\n", version)
+		return
+	case "update":
+		if err := runUpdate(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "erro: %v\n", err)
+			os.Exit(1)
+		}
 		return
 	}
 
@@ -92,4 +104,25 @@ func main() {
 		fmt.Fprintf(os.Stderr, "erro: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// runUpdate despacha `update [check|apply] [--force]`. Sem subcomando, faz
+// o check.
+func runUpdate(args []string) error {
+	sub := "check"
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		sub, args = args[0], args[1:]
+	}
+	fs := flag.NewFlagSet("update "+sub, flag.ExitOnError)
+	force := fs.Bool("force", false, "consulta o GitHub mesmo com o cache válido")
+	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
+	_ = fs.Parse(args)
+
+	switch sub {
+	case "check":
+		return cli.UpdateCheck(version, *force)
+	case "apply":
+		return cli.UpdateApply(version)
+	}
+	return fmt.Errorf("subcomando desconhecido %q (use check ou apply)", sub)
 }
