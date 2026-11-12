@@ -372,3 +372,147 @@ func TestRunSincronizaAoDetectarMudanca(t *testing.T) {
 		t.Error("Run não encerrou após cancelamento do contexto")
 	}
 }
+
+// TestTrimDeOutraMaquinaNaoDescartaMudancaSemConflito reproduz o regime
+// permanente de um repositório com a branch cheia: toda sincronização faz
+// trim e reescreve a história, então o pull da outra máquina encontra
+// "unrelated histories". Uma edição local em OUTRO arquivo não conflita e
+// não pode ser descartada (ADR 0001 só descarta o que conflita).
+func TestTrimDeOutraMaquinaNaoDescartaMudancaSemConflito(t *testing.T) {
+	const limite = 3
+	bare, alice, branch := newRemoteWithClone(t, "alice")
+	bob := cloneFrom(t, bare, "bob")
+	engA := newEngine(gitops.Open(alice), engine.WithMaxCommits(limite))
+	engB := newEngine(gitops.Open(bob), engine.WithMaxCommits(limite))
+
+	// Enche a branch até o limite (seed + 2), e Bob acompanha.
+	for i := 0; i < limite-1; i++ {
+		writeFile(t, alice, "a.txt", "versão "+strconv.Itoa(i))
+		if err := engA.SyncCycle(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := engB.PullCycle(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Alice sincroniza de novo: commit 4 > limite, trim + push --force.
+	writeFile(t, alice, "a.txt", "versão da alice pós-trim")
+	if err := engA.SyncCycle(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Bob editou outro arquivo nesse meio tempo e sincroniza.
+	writeFile(t, bob, "b.txt", "edição do bob")
+	if err := engB.SyncCycle(); err != nil {
+		t.Fatalf("SyncCycle do bob: %v", err)
+	}
+
+	got := git(t, bob, "show", "origin/"+branch+":a.txt")
+	if got != "versão da alice pós-trim" {
+		t.Errorf("a.txt no remoto = %q, quer a versão da alice", got)
+	}
+	data, err := os.ReadFile(filepath.Join(bob, "b.txt"))
+	if err != nil || string(data) != "edição do bob" {
+		t.Fatalf("edição do bob sumiu da working tree: %q, %v", data, err)
+	}
+	git(t, bob, "fetch", "origin")
+	if got := git(t, bob, "show", "origin/"+branch+":b.txt"); got != "edição do bob" {
+		t.Errorf("b.txt no remoto = %q, quer a edição do bob", got)
+	}
+}
+
+// TestTrimDeOutraMaquinaComConflitoRemotoVence: depois do trim da outra
+// máquina, uma edição local no MESMO arquivo é conflito real e o remoto vence.
+func TestTrimDeOutraMaquinaComConflitoRemotoVence(t *testing.T) {
+	const limite = 3
+	bare, alice, branch := newRemoteWithClone(t, "alice")
+	bob := cloneFrom(t, bare, "bob")
+	engA := newEngine(gitops.Open(alice), engine.WithMaxCommits(limite))
+	engB := newEngine(gitops.Open(bob), engine.WithMaxCommits(limite))
+
+	for i := 0; i < limite; i++ { // a última volta já faz trim
+		writeFile(t, alice, "a.txt", "versão "+strconv.Itoa(i))
+		if err := engA.SyncCycle(); err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 {
+			if err := engB.PullCycle(); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	writeFile(t, bob, "a.txt", "versão do bob")
+	if err := engB.SyncCycle(); err != nil {
+		t.Fatalf("SyncCycle do bob: %v", err)
+	}
+	if got := git(t, bob, "show", "HEAD:a.txt"); got != "versão 2" {
+		t.Errorf("a.txt = %q, quer a versão do remoto", got)
+	}
+	if st := git(t, bob, "status", "--porcelain"); st != "" {
+		t.Errorf("working tree suja depois do remoto-vence: %q", st)
+	}
+	if n := git(t, bob, "stash", "list"); n != "" {
+		t.Errorf("stash sobrou: %q", n)
+	}
+	if got := git(t, bob, "rev-parse", "HEAD"); got != git(t, bob, "rev-parse", "origin/"+branch) {
+		t.Error("HEAD do bob não é o remoto")
+	}
+}
+
+// TestPullSemRedePreservaMudancas: com o remoto inacessível, o ciclo falha
+// mas a edição local continua na working tree para o próximo ciclo.
+func TestPullSemRedePreservaMudancas(t *testing.T) {
+	_, clone, _ := newRemoteWithClone(t, "alice")
+	git(t, clone, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "nao-existe.git"))
+	writeFile(t, clone, "novo.txt", "trabalho local")
+
+	if err := newEngine(gitops.Open(clone)).SyncCycle(); err == nil {
+		t.Fatal("esperava erro com o remoto inacessível")
+	}
+	data, err := os.ReadFile(filepath.Join(clone, "novo.txt"))
+	if err != nil || string(data) != "trabalho local" {
+		t.Fatalf("mudança local perdida: %q, %v", data, err)
+	}
+	if n := git(t, clone, "stash", "list"); n != "" {
+		t.Errorf("stash sobrou: %q", n)
+	}
+}
+
+// TestTrimNaoSobrescrevePushConcorrente cobre ADR 0002 no push do trim: se
+// outra máquina publicou entre o pull e o push --force, o push tem de ser
+// rejeitado (force-with-lease) e o remoto vence, em vez de o trim apagar
+// o commit da outra máquina.
+func TestTrimNaoSobrescrevePushConcorrente(t *testing.T) {
+	const limite = 3
+	bare, clone, _ := newRemoteWithClone(t, "alice")
+	repo := gitops.Open(clone)
+	for i := 0; i < limite-1; i++ { // seed + 2 = limite
+		writeFile(t, clone, "alice.bin", "rev-"+strconv.Itoa(i))
+		if err := newEngine(repo, engine.WithMaxCommits(limite)).SyncCycle(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var bobHead string
+	hook := &hookRepo{Repo: repo, afterCommit: func() {
+		other := cloneFrom(t, bare, "bob")
+		writeFile(t, other, "bob.bin", "trabalho do bob")
+		git(t, other, "add", "-A")
+		git(t, other, "commit", "-m", "bob sincroniza no meio")
+		git(t, other, "push", "origin", "main")
+		bobHead = git(t, other, "rev-parse", "HEAD")
+	}}
+
+	writeFile(t, clone, "alice.bin", "rev-final") // commit 4 > limite: trim
+	if err := newEngine(hook, engine.WithMaxCommits(limite)).SyncCycle(); err != nil {
+		t.Fatalf("SyncCycle: %v", err)
+	}
+
+	if got := git(t, bare, "rev-parse", "main"); got != bobHead {
+		t.Fatalf("remoto = %s, quer o commit do bob %s (o trim sobrescreveu o push concorrente)", got, bobHead)
+	}
+	if got := git(t, clone, "rev-parse", "HEAD"); got != bobHead {
+		t.Errorf("alice não convergiu para o remoto: HEAD %s", got)
+	}
+}

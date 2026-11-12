@@ -232,7 +232,12 @@ func (r *Repo) PushForce(branch string) (rejected bool, err error) {
 func (r *Repo) push(branch string, force bool) (bool, error) {
 	args := []string{"push"}
 	if force {
-		args = append(args, "--force")
+		// --force puro nunca é rejeitado por divergência: sobrescreveria um
+		// push que outra máquina fez depois do nosso último fetch (ADR 0002
+		// conta com essa rejeição). O lease exige que o remoto ainda esteja
+		// no commit que conhecemos; vazio = a branch não pode existir lá.
+		expected, _ := r.git("rev-parse", "--verify", "--quiet", "refs/remotes/"+r.Remote+"/"+branch)
+		args = append(args, "--force-with-lease=refs/heads/"+branch+":"+strings.TrimSpace(expected))
 	}
 	args = append(args, r.Remote, branch)
 	_, err := r.git(args...)

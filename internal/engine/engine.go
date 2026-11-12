@@ -131,15 +131,26 @@ func (e *Engine) SyncCycle() error {
 		}
 	}
 
-	// 2. Incorpora o que o remoto tem (pull-first). Qualquer falha de pull é
-	// tratada como conflito de conteúdo: o remoto prevalece, e o que estava
-	// guardado torna-se irrelevante.
+	// 2. Incorpora o que o remoto tem (pull-first). Se o pull falhar, a
+	// branch local assume o remoto (fetch + reset --hard), mas as mudanças
+	// guardadas NÃO são descartadas aqui: elas seguem para o passo 3, que
+	// só as descarta se conflitarem. O caso comum é o trim de outra
+	// máquina: a história reescrita não tem ancestral comum com a local, e
+	// o pull falha com "refusing to merge unrelated histories" a cada
+	// ciclo; descartar o stash nesse ponto perdia toda edição local, mesmo
+	// em arquivos que o remoto nem tocou (ADR 0001 só descarta conflito).
 	if err := e.repo.Pull(); err != nil {
-		e.logf("pull falhou (%v); aplicando remoto-vence: fetch + reset --hard", err)
-		if dirty {
-			_ = e.repo.StashDrop()
+		e.logf("pull falhou (%v); assumindo o remoto (fetch + reset --hard) e reaplicando mudanças locais", err)
+		if err := e.resetToRemote(branch); err != nil {
+			// Remoto inacessível (ex.: sem rede): devolve as mudanças
+			// locais à working tree para o próximo ciclo tentar de novo.
+			if dirty {
+				if _, popErr := e.repo.StashPop(); popErr != nil {
+					return fmt.Errorf("%w (e as mudanças locais ficaram no stash: %v)", err, popErr)
+				}
+			}
+			return err
 		}
-		return e.resetToRemote(branch)
 	}
 
 	// 3. Reaplica as mudanças locais sobre o estado recém-integrado. Se
