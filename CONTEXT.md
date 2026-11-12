@@ -35,14 +35,14 @@ git-sync é um aplicação CLI. O objetivo dessa aplicação é gerenciar um rep
     - quando o debounce expirar, ele deve tentar um `git pull`; se houver conflito (arquivo alterado tanto local quanto remotamente), o remoto prevalece: faz `fetch` + `reset --hard` para o remoto, descartando as mudanças locais conflitantes sem deixar rastro no histórico; caso não haja conflito, segue com `add`, `commit` e `push`
     - a mensagem de commit deverá ser "sync dd-mm-yyyy hh:mm (nome do usuário git)", onde o nome vem do `git config user.name` local do repositório, com fallback pro `user.name` global caso não haja local; se nenhum dos dois estiver configurado, é erro (sinalizado ao usuário, não segue sem o nome)
     - o programa deverá a cada 1h, fazer o pull do repositório
-    - o programa deverá manter um limite de N=20 commits na branch atual: ao criar o commit N+1, deve reescrever o histórico local (squash/orphan) mantendo apenas os N commits mais recentes e fazer `push --force`
+    - o programa deverá manter um limite de 100 commits na branch atual: ao atingir o 100º commit, deve reescrever o histórico local (squash/orphan) mantendo apenas os 50 commits mais recentes e fazer `push --force-with-lease` (ADR 0005; antes era N=20, reescrevendo a cada commit)
     - a mesma política de "o remoto sempre vence" vale também para o `push` (não só para o `pull`): se o `push` (inclusive o `push --force` do trim) for rejeitado por divergência do remoto — por exemplo, outra máquina já sincronizou ou já fez o trim primeiro — a máquina faz `fetch` + `reset --hard` para o remoto e pula esse ciclo, sem coordenação entre máquinas
 
 ### uninstall
 
 - esse comando deverá desfazer tudo, inclusive questões de inicialização (para o processo em background, remove a unit de autostart de usuário do repositório atual). Escopo é só local: não mexe no remote nem no histórico de commits do repositório.
 
-Não há comando `config`: os três parâmetros do programa em background (debounce de 1 minuto, pull horário, limite de N=20 commits) são fixos e não configuráveis pelo usuário.
+Não há comando `config`: os três parâmetros do programa em background (debounce de 1 minuto, pull horário, limite de 100 commits, mantendo 50 no trim) são fixos e não configuráveis pelo usuário.
 
 # Implementação (Go)
 

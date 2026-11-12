@@ -4,7 +4,7 @@
 // ADRs: a cada ciclo tenta pull → add → commit → push, aplicando a
 // política unificada "o remoto sempre vence" (ADR 0001/0002) tanto na
 // falha de pull (conflito de conteúdo) quanto na rejeição de push
-// (divergência do remoto), e mantendo a branch limitada a MaxCommits.
+// (divergência do remoto), e mantendo a branch abaixo de MaxCommits.
 //
 // A lógica de domínio (SyncCycle/PullCycle) é independente de
 // filesystem-watch e de temporizadores, o que permite exercitá-la em
@@ -26,8 +26,12 @@ const (
 	Debounce = 3 * time.Minute
 	// PullInterval é o intervalo do pull periódico, independente de mudanças.
 	PullInterval = time.Hour
-	// MaxCommits é o limite de commits mantidos na branch.
-	MaxCommits = 20
+	// MaxCommits é o limite de commits da branch: ao chegar nele, o trim
+	// descarta a metade mais antiga e mantém os MaxCommits/2 mais recentes.
+	// A folga faz a reescrita da história (que obriga as outras máquinas a
+	// reconciliar) acontecer uma vez a cada MaxCommits/2 syncs, e não a
+	// cada sync (ADR 0005).
+	MaxCommits = 100
 )
 
 // LogFileName é o arquivo de log de execução local, na raiz do repositório.
@@ -82,7 +86,8 @@ func WithLogger(logf func(format string, args ...any)) Option {
 	return func(e *Engine) { e.logf = logf }
 }
 
-// WithMaxCommits sobrescreve o limite de commits (usado em testes).
+// WithMaxCommits sobrescreve o limite de commits (usado em testes); o trim
+// mantém a metade, como com MaxCommits.
 func WithMaxCommits(n int) Option {
 	return func(e *Engine) { e.maxCommits = n }
 }
@@ -185,14 +190,15 @@ func (e *Engine) SyncCycle() error {
 		return err
 	}
 
-	// 6. Trim: ao ultrapassar o limite, reescreve a história e força push.
+	// 6. Trim: ao chegar no limite, mantém a metade mais recente e força push.
 	count, err := e.repo.CommitCount()
 	if err != nil {
 		return err
 	}
-	if count > e.maxCommits {
-		e.logf("branch %s excedeu %d commits (%d); reescrevendo história", branch, e.maxCommits, count)
-		if err := e.repo.Trim(branch, e.maxCommits); err != nil {
+	if count >= e.maxCommits {
+		keep := e.maxCommits / 2
+		e.logf("branch %s chegou a %d commits (limite %d); reescrevendo história com os %d mais recentes", branch, count, e.maxCommits, keep)
+		if err := e.repo.Trim(branch, keep); err != nil {
 			return err
 		}
 		return e.pushOrReset(branch, true)

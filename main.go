@@ -46,7 +46,7 @@ Flags:
   --repo <caminho>   Repositório alvo (padrão: diretório atual).
 
 Parâmetros do daemon são fixos: debounce de 3 minutos, pull a cada 1 hora,
-limite de 20 commits.
+limite de 100 commits (o trim mantém os 50 mais recentes).
 `
 
 func main() {

@@ -52,8 +52,9 @@ gravável pelo seu usuário. Se o repositório de releases for privado, defina
 - **Debounce de 1 minuto:** mudanças em rajada viram um único commit.
 - **Pull a cada 1 hora**, além do pull a cada ciclo de sync.
 - **Mensagem de commit:** `sync dd-mm-yyyy hh:mm (nome do git user.name)`.
-- **Limite de 20 commits** na branch: ao ultrapassar, o histórico é reescrito
-  mantendo só os 20 mais recentes e é feito `push --force`.
+- **Limite de 100 commits** na branch: ao atingir o limite, o histórico é reescrito
+  mantendo só os 50 mais recentes e é feito um push forçado (`--force-with-lease`).
+  A reescrita acontece uma vez a cada 50 syncs (ver [ADR 0005](docs/adr/0005-trim-com-folga.md)).
 - **O remoto sempre vence:** em conflito de conteúdo (`pull`) ou rejeição de
   `push` por divergência, o git-sync faz `fetch` + `reset --hard` para o remoto
   e descarta o ciclo local — sem coordenação entre máquinas. Mudanças locais

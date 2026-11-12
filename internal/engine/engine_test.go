@@ -220,32 +220,52 @@ func TestPullFirstComArvoreSuja(t *testing.T) {
 // limite, a história é reescrita mantendo só os N mais recentes e forçada
 // ao remoto.
 func TestTrimAoExceLimite(t *testing.T) {
-	const max = 3
+	const max = 4 // dispara ao chegar em 4 commits e mantém 2
 	bare, clone, _ := newRemoteWithClone(t, "alice")
 
 	repo := gitops.Open(clone)
 	eng := newEngine(repo, engine.WithMaxCommits(max))
 
-	// A partir de 1 commit (seed), cada ciclo adiciona 1 commit até
-	// ultrapassar o limite e disparar o trim.
-	for i := 0; i < 5; i++ {
+	sync := func(i int) {
+		t.Helper()
 		writeFile(t, clone, "dados.bin", "rev-"+strconv.Itoa(i))
 		if err := eng.SyncCycle(); err != nil {
 			t.Fatalf("SyncCycle %d: %v", i, err)
 		}
 	}
 
-	if n := commitCount(t, clone, "HEAD"); n != max {
-		t.Errorf("commits locais = %d, quer %d", n, max)
+	// seed + 2 ciclos = 3 commits: abaixo do limite, nada é reescrito.
+	sync(0)
+	sync(1)
+	if n := commitCount(t, clone, "HEAD"); n != 3 {
+		t.Fatalf("antes do limite: commits = %d, quer 3", n)
 	}
-	// O remoto recebeu o histórico reescrito (push --force).
-	if n := commitCount(t, bare, "main"); n != max {
-		t.Errorf("commits no remoto = %d, quer %d", n, max)
+	raiz := git(t, clone, "rev-list", "--max-parents=0", "HEAD")
+
+	// Commit 4 = limite: fica só a metade mais recente.
+	sync(2)
+	if n := commitCount(t, clone, "HEAD"); n != max/2 {
+		t.Errorf("após o trim: commits locais = %d, quer %d", n, max/2)
 	}
-	// Conteúdo mais recente preservado.
+	if n := commitCount(t, bare, "main"); n != max/2 {
+		t.Errorf("após o trim: commits no remoto = %d, quer %d (push --force)", n, max/2)
+	}
+	if git(t, clone, "rev-list", "--max-parents=0", "HEAD") == raiz {
+		t.Error("a raiz não mudou: história não foi reescrita")
+	}
+
+	// O próximo ciclo só acrescenta (sem nova reescrita até o limite).
+	novaRaiz := git(t, clone, "rev-list", "--max-parents=0", "HEAD")
+	sync(3)
+	if n := commitCount(t, clone, "HEAD"); n != max/2+1 {
+		t.Errorf("depois do trim: commits = %d, quer %d", n, max/2+1)
+	}
+	if git(t, clone, "rev-list", "--max-parents=0", "HEAD") != novaRaiz {
+		t.Error("ciclo abaixo do limite reescreveu a história")
+	}
 	got, _ := os.ReadFile(filepath.Join(clone, "dados.bin"))
-	if string(got) != "rev-4" {
-		t.Errorf("conteúdo HEAD = %q, quer rev-4", got)
+	if string(got) != "rev-3" {
+		t.Errorf("conteúdo HEAD = %q, quer rev-3", got)
 	}
 }
 
@@ -379,14 +399,14 @@ func TestRunSincronizaAoDetectarMudanca(t *testing.T) {
 // "unrelated histories". Uma edição local em OUTRO arquivo não conflita e
 // não pode ser descartada (ADR 0001 só descarta o que conflita).
 func TestTrimDeOutraMaquinaNaoDescartaMudancaSemConflito(t *testing.T) {
-	const limite = 3
+	const limite = 4
 	bare, alice, branch := newRemoteWithClone(t, "alice")
 	bob := cloneFrom(t, bare, "bob")
 	engA := newEngine(gitops.Open(alice), engine.WithMaxCommits(limite))
 	engB := newEngine(gitops.Open(bob), engine.WithMaxCommits(limite))
 
-	// Enche a branch até o limite (seed + 2), e Bob acompanha.
-	for i := 0; i < limite-1; i++ {
+	// Enche a branch até um commit antes do limite, e Bob acompanha.
+	for i := 0; i < limite-2; i++ {
 		writeFile(t, alice, "a.txt", "versão "+strconv.Itoa(i))
 		if err := engA.SyncCycle(); err != nil {
 			t.Fatal(err)
@@ -396,7 +416,7 @@ func TestTrimDeOutraMaquinaNaoDescartaMudancaSemConflito(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Alice sincroniza de novo: commit 4 > limite, trim + push --force.
+	// Alice sincroniza de novo: chega ao limite, trim + push --force.
 	writeFile(t, alice, "a.txt", "versão da alice pós-trim")
 	if err := engA.SyncCycle(); err != nil {
 		t.Fatal(err)
@@ -425,13 +445,13 @@ func TestTrimDeOutraMaquinaNaoDescartaMudancaSemConflito(t *testing.T) {
 // TestTrimDeOutraMaquinaComConflitoRemotoVence: depois do trim da outra
 // máquina, uma edição local no MESMO arquivo é conflito real e o remoto vence.
 func TestTrimDeOutraMaquinaComConflitoRemotoVence(t *testing.T) {
-	const limite = 3
+	const limite = 4
 	bare, alice, branch := newRemoteWithClone(t, "alice")
 	bob := cloneFrom(t, bare, "bob")
 	engA := newEngine(gitops.Open(alice), engine.WithMaxCommits(limite))
 	engB := newEngine(gitops.Open(bob), engine.WithMaxCommits(limite))
 
-	for i := 0; i < limite; i++ { // a última volta já faz trim
+	for i := 0; i < limite-1; i++ { // a última volta chega ao limite e faz trim
 		writeFile(t, alice, "a.txt", "versão "+strconv.Itoa(i))
 		if err := engA.SyncCycle(); err != nil {
 			t.Fatal(err)
@@ -484,10 +504,10 @@ func TestPullSemRedePreservaMudancas(t *testing.T) {
 // rejeitado (force-with-lease) e o remoto vence, em vez de o trim apagar
 // o commit da outra máquina.
 func TestTrimNaoSobrescrevePushConcorrente(t *testing.T) {
-	const limite = 3
+	const limite = 4
 	bare, clone, _ := newRemoteWithClone(t, "alice")
 	repo := gitops.Open(clone)
-	for i := 0; i < limite-1; i++ { // seed + 2 = limite
+	for i := 0; i < limite-2; i++ { // um commit antes do limite
 		writeFile(t, clone, "alice.bin", "rev-"+strconv.Itoa(i))
 		if err := newEngine(repo, engine.WithMaxCommits(limite)).SyncCycle(); err != nil {
 			t.Fatal(err)
@@ -504,7 +524,7 @@ func TestTrimNaoSobrescrevePushConcorrente(t *testing.T) {
 		bobHead = git(t, other, "rev-parse", "HEAD")
 	}}
 
-	writeFile(t, clone, "alice.bin", "rev-final") // commit 4 > limite: trim
+	writeFile(t, clone, "alice.bin", "rev-final") // chega ao limite: trim
 	if err := newEngine(hook, engine.WithMaxCommits(limite)).SyncCycle(); err != nil {
 		t.Fatalf("SyncCycle: %v", err)
 	}
